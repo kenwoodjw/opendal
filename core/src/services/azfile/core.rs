@@ -30,7 +30,6 @@ use reqsign::AzureStorageSigner;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::fmt::Formatter;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use super::error::parse_error;
@@ -113,6 +112,8 @@ impl AzfileCore {
             req = req.header(RANGE, range.to_header());
         }
 
+        let req = req.extension(Operation::Read);
+
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
         self.info.http_client().fetch(req).await
@@ -153,6 +154,8 @@ impl AzfileCore {
             req = req.header(CONTENT_DISPOSITION, pos);
         }
 
+        let req = req.extension(Operation::Write);
+
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
         self.send(req).await
@@ -187,6 +190,8 @@ impl AzfileCore {
             BytesRange::from(position..position + size).to_header(),
         );
 
+        let req = req.extension(Operation::Write);
+
         let mut req = req.body(body).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
         self.send(req).await
@@ -202,6 +207,8 @@ impl AzfileCore {
         );
 
         let req = Request::head(&url);
+
+        let req = req.extension(Operation::Stat);
 
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
@@ -219,6 +226,8 @@ impl AzfileCore {
         );
 
         let req = Request::head(&url);
+
+        let req = req.extension(Operation::Stat);
 
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
@@ -270,6 +279,8 @@ impl AzfileCore {
 
         req = req.header(X_MS_FILE_RENAME_REPLACE_IF_EXISTS, "true");
 
+        let req = req.extension(Operation::Rename);
+
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
         self.send(req).await
@@ -291,6 +302,8 @@ impl AzfileCore {
 
         req = req.header(CONTENT_LENGTH, 0);
 
+        let req = req.extension(Operation::CreateDir);
+
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
         self.send(req).await
@@ -309,6 +322,8 @@ impl AzfileCore {
         );
 
         let req = Request::delete(&url);
+
+        let req = req.extension(Operation::Delete);
 
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
@@ -329,6 +344,8 @@ impl AzfileCore {
 
         let req = Request::delete(&url);
 
+        let req = req.extension(Operation::Delete);
+
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
         self.send(req).await
@@ -338,28 +355,35 @@ impl AzfileCore {
         &self,
         path: &str,
         limit: &Option<usize>,
-        continuation: &String,
+        continuation: &str,
     ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path)
             .trim_start_matches('/')
             .to_string();
 
-        let mut url = format!(
-            "{}/{}/{}?restype=directory&comp=list&include=Timestamps,ETag",
+        let url = format!(
+            "{}/{}/{}",
             self.endpoint,
             self.share_name,
             percent_encode_path(&p),
         );
 
+        let mut url = QueryPairsWriter::new(&url)
+            .push("restype", "directory")
+            .push("comp", "list")
+            .push("include", "Timestamps,ETag");
+
         if !continuation.is_empty() {
-            write!(url, "&marker={}", &continuation).expect("write into string must succeed");
+            url = url.push("marker", continuation);
         }
 
         if let Some(limit) = limit {
-            write!(url, "&maxresults={}", limit).expect("write into string must succeed");
+            url = url.push("maxresults", &limit.to_string());
         }
 
-        let req = Request::get(&url);
+        let req = Request::get(url.finish());
+
+        let req = req.extension(Operation::List);
 
         let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
         self.sign(&mut req).await?;
